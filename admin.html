@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin – vzdělávací demo kamery</title>
+  <style>
+    :root {
+      --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --muted: #94a3b8;
+      --accent: #38bdf8; --danger: #f87171; --ok: #4ade80; --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh; padding: 20px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 { color: var(--accent); margin-bottom: 8px; }
+    .subtitle { color: var(--muted); margin-bottom: 24px; }
+    .panel {
+      background: var(--card); border-radius: 12px; padding: 20px; margin-bottom: 20px;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    button {
+      padding: 12px 18px; border: none; border-radius: 8px;
+      font-weight: 600; font-size: 0.95rem; cursor: pointer;
+    }
+    .btn-on { background: var(--ok); color: #052e16; }
+    .btn-off { background: #334155; color: var(--text); }
+    .btn-danger { background: var(--danger); color: #450a0a; }
+    .btn-accent { background: var(--accent); color: #0f172a; }
+    .btn-active { outline: 3px solid #fff; }
+    label { color: var(--muted); font-size: 0.9rem; }
+    input[type="number"] {
+      width: 70px; padding: 8px 10px; border-radius: 6px; border: 1px solid #475569;
+      background: #0f172a; color: var(--text); font-size: 1rem;
+    }
+    .status-line {
+      font-family: ui-monospace, monospace; margin-top: 14px; padding: 10px 14px;
+      background: #0f172a; border-radius: 8px; border-left: 4px solid var(--muted);
+    }
+    .status-line.live { border-left-color: var(--ok); }
+    .gallery {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px; margin-top: 12px;
+    }
+    .gallery figure { background: #0f172a; border-radius: 8px; overflow: hidden; margin: 0; }
+    .gallery img { width: 100%; height: 160px; object-fit: cover; display: block; background: #000; }
+    .gallery figcaption { font-size: 0.75rem; color: var(--muted); padding: 6px 8px; word-break: break-all; }
+    .empty { color: var(--muted); padding: 20px 0; }
+    a { color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #334155; }
+    th { color: var(--muted); font-weight: 600; }
+    .dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--ok); margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Admin – vzdělávací demo</h1>
+    <p class="subtitle">Ovládání snímání pro přednášku · securitydemo.lukashorak.net</p>
+
+    <div class="panel">
+      <h2 style="font-size:1.1rem;margin-bottom:12px;">Režim snímání</h2>
+      <div class="controls">
+        <button id="btnPhotos" class="btn-off" onclick="togglePhotos()">Fotky: VYP</button>
+        <button id="btnAudio" class="btn-off" onclick="toggleAudio()">Audio: VYP</button>
+        <button class="btn-accent" onclick="forcePhoto()">Pořídit snímek ihned</button>
+        <button class="btn-danger" onclick="stopAll()">Vše vypnout</button>
+      </div>
+
+      <div class="controls" style="margin-top:14px;">
+        <label for="intervalInput">Interval fotek (sekundy):</label>
+        <input type="number" id="intervalInput" min="3" max="120" value="15" />
+        <button class="btn-accent" onclick="saveInterval()">Nastavit interval</button>
+      </div>
+
+      <div id="modeStatus" class="status-line">Režim: vypnuto</div>
+    </div>
+
+    <div class="panel">
+      <h2 style="font-size:1.1rem;margin-bottom:8px;">Připojená zařízení <span id="partCount" style="color:var(--muted);font-weight:400"></span></h2>
+      <div id="participants">
+        <div class="empty">Zatím nikdo připojený…</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 style="font-size:1.1rem;margin-bottom:8px;">Přijaté snímky a nahrávky</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin-bottom:8px;">
+        Soubory:
+        <a href="https://drive.google.com/drive/folders/1mW8bYXq4FL1RpFi4DIapAGHFwuh6gKJn" target="_blank">Google Drive složka</a>
+      </p>
+      <div id="gallery" class="gallery">
+        <div class="empty">Zatím žádné soubory…</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJgtvn8AhbJfObH14yMGP4W81U50WEKEvr2pMs0pQvBXkLDAZVjHwaUvsBpOtXUYAVUw/exec";
+
+    let mode = { photos: false, audio: false, interval: 15 };
+
+    async function api(payload) {
+      if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("SEM_VLOZ")) {
+        console.log("API demo:", payload);
+        return { status: "demo", ...payload };
+      }
+      const res = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload)
+      });
+      const text = await res.text();
+      try { return JSON.parse(text); } catch { return { status: "ok", raw: text }; }
+    }
+
+    async function refreshMode() {
+      try {
+        const res = await fetch(APPS_SCRIPT_URL + "?action=getMode&t=" + Date.now());
+        mode = await res.json();
+        document.getElementById("intervalInput").value = mode.interval || 15;
+        updateButtons();
+      } catch (e) {}
+    }
+
+    function updateButtons() {
+      const bp = document.getElementById("btnPhotos");
+      const ba = document.getElementById("btnAudio");
+      bp.textContent = "Fotky: " + (mode.photos ? "ZAP (" + (mode.interval || 15) + " s)" : "VYP");
+      bp.className = mode.photos ? "btn-on btn-active" : "btn-off";
+      ba.textContent = "Audio: " + (mode.audio ? "ZAP" : "VYP");
+      ba.className = mode.audio ? "btn-on btn-active" : "btn-off";
+
+      const st = document.getElementById("modeStatus");
+      const parts = [];
+      if (mode.photos) parts.push("fotky každých " + (mode.interval || 15) + " s");
+      if (mode.audio) parts.push("audio");
+      if (parts.length) {
+        st.textContent = "Režim: AKTIVNÍ → " + parts.join(" + ");
+        st.className = "status-line live";
+      } else {
+        st.textContent = "Režim: vypnuto";
+        st.className = "status-line";
+      }
+    }
+
+    async function togglePhotos() {
+      mode.photos = !mode.photos;
+      await api({ action: "setMode", photos: mode.photos, audio: mode.audio, interval: mode.interval });
+      updateButtons();
+    }
+
+    async function toggleAudio() {
+      mode.audio = !mode.audio;
+      await api({ action: "setMode", photos: mode.photos, audio: mode.audio, interval: mode.interval });
+      updateButtons();
+    }
+
+    async function saveInterval() {
+      const val = parseInt(document.getElementById("intervalInput").value, 10);
+      mode.interval = Math.max(3, Math.min(120, val || 15));
+      document.getElementById("intervalInput").value = mode.interval;
+      await api({ action: "setMode", photos: mode.photos, audio: mode.audio, interval: mode.interval });
+      updateButtons();
+    }
+
+    async function forcePhoto() {
+      await api({ action: "setMode", forcePhoto: true });
+    }
+
+    async function stopAll() {
+      mode.photos = false;
+      mode.audio = false;
+      await api({ action: "stopAll" });
+      updateButtons();
+    }
+
+    async function refreshParticipants() {
+      if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("SEM_VLOZ")) return;
+      try {
+        const res = await fetch(APPS_SCRIPT_URL + "?action=listParticipants&t=" + Date.now());
+        const data = await res.json();
+        const box = document.getElementById("participants");
+        const list = data.participants || [];
+        document.getElementById("partCount").textContent = list.length ? "(" + list.length + ")" : "";
+
+        if (!list.length) {
+          box.innerHTML = '<div class="empty">Zatím nikdo připojený…</div>';
+          return;
+        }
+
+        box.innerHTML = `<table>
+          <thead><tr><th>Stav</th><th>Typ</th><th>ID</th><th>Poslední kontakt</th><th>UA (zkráceně)</th></tr></thead>
+          <tbody>
+            ${list.map(p => `
+              <tr>
+                <td><span class="dot"></span>online</td>
+                <td>${escapeHtml(p.label || "—")}</td>
+                <td><code style="font-size:0.75rem">${escapeHtml((p.id || "").slice(0, 8))}…</code></td>
+                <td>${new Date(p.lastSeen).toLocaleTimeString("cs")}</td>
+                <td style="font-size:0.75rem;color:var(--muted)">${escapeHtml((p.ua || "").slice(0, 60))}…</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>`;
+      } catch (e) {}
+    }
+
+    async function refreshGallery() {
+      if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes("SEM_VLOZ")) return;
+      try {
+        const res = await fetch(APPS_SCRIPT_URL + "?action=listRecent&limit=24&t=" + Date.now());
+        const data = await res.json();
+        const gal = document.getElementById("gallery");
+        if (!data.files || !data.files.length) {
+          gal.innerHTML = '<div class="empty">Zatím žádné soubory…</div>';
+          return;
+        }
+        gal.innerHTML = data.files.map(f => {
+          if (f.mime && f.mime.indexOf("image/") === 0) {
+            return `<figure>
+              <img src="${f.url}" alt="${escapeHtml(f.name)}" loading="lazy" />
+              <figcaption>${escapeHtml(f.name)}<br>${new Date(f.created).toLocaleString("cs")}</figcaption>
+            </figure>`;
+          }
+          return `<figure>
+            <div style="height:160px;display:flex;align-items:center;justify-content:center;background:#000;color:#94a3b8;">🎵 Audio</div>
+            <figcaption>${escapeHtml(f.name)}<br>${new Date(f.created).toLocaleString("cs")}</figcaption>
+          </figure>`;
+        }).join("");
+      } catch (e) {}
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      })[c]);
+    }
+
+    refreshMode();
+    refreshParticipants();
+    refreshGallery();
+    setInterval(refreshMode, 5000);
+    setInterval(refreshParticipants, 4000);
+    setInterval(refreshGallery, 8000);
+  </script>
+</body>
+</html>
